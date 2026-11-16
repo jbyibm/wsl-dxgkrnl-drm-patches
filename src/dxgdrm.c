@@ -54,20 +54,29 @@ static void dxg_drm_postclose(struct drm_device *drm_dev, struct drm_file *file)
 	}
 }
 
+
 static long dxg_drm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
-	struct drm_file *file_priv = filp->private_data;
-	struct dxgprocess *process = file_priv->driver_priv;
+        struct drm_file *file_priv = filp->private_data;
+        struct dxgprocess *process = file_priv->driver_priv;
 
-	if (!process)
-		return -EINVAL;
+        if (!process)
+                return -EINVAL;
 
-	/* Redirect to existing dxgkrnl IOCTL handler */
-	return dxgk_unlocked_ioctl(filp, cmd, arg);
+        if (_IOC_TYPE(cmd) == 0x47) {
+                struct file dxg_file = {
+                        .private_data = process,
+                };
+
+                return dxgk_unlocked_ioctl(&dxg_file, cmd, arg);
+        }
+
+        return drm_ioctl(filp, cmd, arg);
 }
 
 static const struct file_operations dxg_drm_fops = {
 	.owner = THIS_MODULE,
+     .fop_flags = FOP_UNSIGNED_OFFSET,
 	.open = drm_open,
 	.release = drm_release,
 	.unlocked_ioctl = dxg_drm_ioctl,
@@ -84,10 +93,6 @@ static const struct drm_driver dxg_drm_driver = {
 	.fops = &dxg_drm_fops,
 	.name = DRIVER_NAME,
 	.desc = DRIVER_DESC,
-	.date = DRIVER_DATE,
-	.major = DRIVER_MAJOR,
-	.minor = DRIVER_MINOR,
-	.patchlevel = DRIVER_PATCHLEVEL,
 };
 
 /**
