@@ -1,100 +1,58 @@
-#!/bin/bash
-#
-# apply-patches.sh - Apply DRM integration patches to WSL2 kernel source
-#
-# Usage: ./apply-patches.sh /path/to/WSL2-Linux-Kernel
-#
+#!/usr/bin/env bash
+# Apply the dxgkrnl DRM integration to a WSL2 kernel tree.
+# Usage: ./scripts/apply-patches.sh /path/to/WSL2-Linux-Kernel
 
-set -e
+set -Eeuo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PATCHES_DIR="$SCRIPT_DIR/../patches"
-SRC_DIR="$SCRIPT_DIR/../src"
+SRC_FILE="$SCRIPT_DIR/../src/dxgdrm.c"
+DXG_REL="drivers/hv/dxgkrnl"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-print_status() {
-    echo -e "${GREEN}[✓]${NC} $1"
+usage() {
+    echo "Usage: $0 /path/to/WSL2-Linux-Kernel" >&2
+    exit 2
 }
-
-print_warning() {
-    echo -e "${YELLOW}[!]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[✗]${NC} $1"
-}
-
-# Check arguments
-if [ -z "$1" ]; then
-    echo "Usage: $0 /path/to/WSL2-Linux-Kernel"
-    echo ""
-    echo "This script applies DRM integration patches to the WSL2 kernel source."
+die() {
+    echo "[ERROR] $*" >&2
     exit 1
-fi
+}
 
-# Convert to absolute path
-KERNEL_DIR="$(cd "$1" && pwd)"
+[[ $# -eq 1 ]] || usage
+KERNEL_DIR="$(cd -- "$1" && pwd)"
+[[ -f "$KERNEL_DIR/$DXG_REL/dxgkrnl.h" ]] || die "No dxgkrnl source found in $KERNEL_DIR"
+[[ -s "$SRC_FILE" ]] || die "Missing or empty source file: $SRC_FILE"
+compgen -G "$PATCHES_DIR/*.patch" >/dev/null || die "No patch files found in $PATCHES_DIR"
 
-# Verify kernel directory
-if [ ! -f "$KERNEL_DIR/drivers/hv/dxgkrnl/dxgkrnl.h" ]; then
-    print_error "Cannot find dxgkrnl driver in $KERNEL_DIR"
-    print_error "Make sure you're pointing to a valid WSL2 kernel source directory"
-    exit 1
-fi
+command -v patch >/dev/null 2>&1 || die "The 'patch' command is required"
 
-echo "=============================================="
-echo "  WSL2 dxgkrnl DRM Integration Patch Applier"
-echo "=============================================="
-echo ""
-echo "Kernel directory: $KERNEL_DIR"
-echo ""
-
-# Apply patches
 cd "$KERNEL_DIR"
+echo "Kernel tree: $KERNEL_DIR"
 
-echo "Applying patches..."
-echo ""
-
-for patch in "$PATCHES_DIR"/*.patch; do
-    if [ -f "$patch" ]; then
-        patch_name=$(basename "$patch")
-        echo -n "Applying $patch_name... "
-        
-        if patch -p1 --dry-run < "$patch" > /dev/null 2>&1; then
-            patch -p1 < "$patch" > /dev/null 2>&1
-            print_status "OK"
-        else
-            print_warning "Already applied or conflict"
-        fi
+for patch_file in "$PATCHES_DIR"/*.patch; do
+    name="$(basename "$patch_file")"
+    if patch -p1 --dry-run --forward < "$patch_file" >/dev/null 2>&1; then
+        echo "[APPLY] $name"
+        patch -p1 --forward < "$patch_file"
+    elif patch -p1 --dry-run --reverse < "$patch_file" >/dev/null 2>&1; then
+        echo "[SKIP]  $name (already applied)"
+    else
+        die "$name cannot be applied cleanly and is not already applied. Stopping rather than treating a conflict as success."
     fi
 done
 
-echo ""
+install -m 0644 "$SRC_FILE" "$KERNEL_DIR/$DXG_REL/dxgdrm.c"
+echo "[OK]    Installed dxgdrm.c"
 
-# Copy new source file
-echo -n "Copying dxgdrm.c... "
-if [ -f "$SRC_DIR/dxgdrm.c" ]; then
-    cp "$SRC_DIR/dxgdrm.c" "$KERNEL_DIR/drivers/hv/dxgkrnl/"
-    print_status "OK"
-else
-    print_error "dxgdrm.c not found in $SRC_DIR"
-    exit 1
-fi
+echo "Checking expected integration points..."
+grep -Eq 'struct drm_device[[:space:]]*\*drm_dev' "$KERNEL_DIR/$DXG_REL/dxgkrnl.h" || die "drm_dev field missing from dxgkrnl.h"
+grep -Eq 'dxg_drm_init_adapter\(' "$KERNEL_DIR/$DXG_REL/dxgadapter.c" || die "DRM init hook missing from dxgadapter.c"
+grep -Eq 'dxg_drm_destroy_adapter\(' "$KERNEL_DIR/$DXG_REL/dxgadapter.c" || die "DRM teardown hook missing from dxgadapter.c"
+grep -Eq '^struct dxgprocess \*dxgglobal_get_current_process' "$KERNEL_DIR/$DXG_REL/dxgmodule.c" || die "current-process helper is not externally visible in dxgmodule.c"
+grep -Eq 'dxgdrm\.o' "$KERNEL_DIR/$DXG_REL/Makefile" || die "dxgdrm.o missing from dxgkrnl Makefile"
 
-echo ""
-echo "=============================================="
-print_status "All patches applied successfully!"
-echo "=============================================="
-echo ""
-echo "Next steps:"
-echo "  1. Configure kernel: cp Microsoft/config-wsl .config && make olddefconfig"
-echo "  2. Build kernel:     make -j\$(nproc)"
-echo "  3. Copy to Windows:  cp arch/x86/boot/bzImage /mnt/c/Users/YOUR_USER/"
-echo "  4. Configure WSL:    Edit C:\\Users\\YOUR_USER\\.wslconfig"
-echo "  5. Restart WSL:      wsl --shutdown && wsl"
-echo ""
+# Ensure the copied source has the corrected ioctl routing expected by this fork.
+grep -Fq 'dxgk_unlocked_ioctl(&dxg_file, cmd, arg)' "$KERNEL_DIR/$DXG_REL/dxgdrm.c" || die "Corrected DXG ioctl routing not found in dxgdrm.c"
+grep -Fq 'return drm_ioctl(filp, cmd, arg);' "$KERNEL_DIR/$DXG_REL/dxgdrm.c" || die "DRM ioctl fallback not found in dxgdrm.c"
+
+echo "[OK] DRM integration patches and source file are present."

@@ -50,10 +50,10 @@ wsl-dxgkrnl-drm-patches/
 # 1. Clone WSL2 kernel source
 git clone https://github.com/microsoft/WSL2-Linux-Kernel.git
 cd WSL2-Linux-Kernel
-git checkout linux-msft-wsl-6.6.y  # or your preferred version
+git checkout linux-msft-wsl-6.18.58.1  # tested target for this patch set
 
 # 2. Clone this patches repository
-git clone https://github.com/0deep/wsl-dxgkrnl-drm-patches.git
+git clone https://github.com/jbyibm/wsl-dxgkrnl-drm-patches.git
 
 # 3. Apply patches
 wsl-dxgkrnl-drm-patches/scripts/apply-patches.sh .
@@ -121,7 +121,7 @@ After booting with the new kernel:
 ```bash
 # Check kernel version
 uname -r
-# Expected: 6.6.x-microsoft-standard-WSL2+
+# Expected: your selected Microsoft WSL kernel release
 
 # Verify DRM nodes
 ls -la /dev/dri/
@@ -192,7 +192,7 @@ ls -la /dev/dxg
 |------|---------|
 | `dxgkrnl.h` | Added DRM headers, `drm_device` pointer in `dxgadapter` struct, function declarations |
 | `dxgadapter.c` | Added DRM device init/destroy in adapter start/stop |
-| `dxgmodule.c` | Exported `dxgglobal_get_current_process()` function |
+| `dxgmodule.c` | Exported `dxgglobal_get_current_process()` helper (made non-static so `dxgdrm.c` can call it) |
 | `Makefile` | Added `dxgdrm.o` to build |
 | `dxgdrm.c` | **NEW** - DRM driver integration (open, close, ioctl handlers) |
 
@@ -275,9 +275,8 @@ Some IOCTL errors (`-22`, `-2`) are normal and do not affect DRM functionality. 
 
 | WSL2 Kernel Version | Status | Notes |
 |---------------------|--------|-------|
-| 6.6.x | ✅ Tested | Fully compatible |
-| 6.1.x | ⚠️ Untested | Should work with minor adjustments |
-| 5.15.x | ❌ Not supported | API differences |
+| 6.18.58.1 | ⚠️ Targeted | Patch set prepared against this WSL kernel baseline; verify by building and booting your resulting kernel |
+| Other versions | ⚠️ Untested | Patch context and DRM APIs may differ |
 
 | Host GPU | Status |
 |----------|--------|
@@ -298,7 +297,7 @@ Contributions are welcome! Please:
 
 This project is licensed under GPL-2.0, same as the Linux kernel.
 
-The original `dxgkrnl` driver is Copyright (c) Microsoft Corporation.
+The original `dxgkrnl` driver is Copyright (c) Microsoft Corporation. This fork maintains the DRM integration patches and corrected `dxgdrm.c` source used by the build workflow.
 
 ## 🔗 Related Projects
 
